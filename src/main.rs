@@ -23,10 +23,10 @@ async fn main() {
 }
 
 async fn handler(State(mut state): State<AppState>) -> String {
-    let _: () = state.redis.set("key", "value").await.unwrap();
+    let _: () = state.redis.set_ex("key", "value", 1800).await.unwrap();
     state
         .redis
-        .get("key")
+        .get_del("key")
         .await
         .unwrap()
         .expect("Key should exist after SET")
