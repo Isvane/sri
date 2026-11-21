@@ -1,4 +1,9 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{get, post},
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
@@ -22,8 +27,18 @@ struct CreateSecretRequest {
 #[derive(Debug, Serialize)]
 struct CreateSecretResponse {
     identifier: String,
-    enc_decrypted_key: String,
+    encoded_key: String,
     expiry: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RevealSecretRequest {
+    decryption_key: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RevealSecretResponse {
+    secret: String,
 }
 
 #[tokio::main]
@@ -38,6 +53,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/secrets", post(create_secret))
+        .route("/reveal/{identifier}", get(reveal_secret))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -71,7 +87,52 @@ async fn create_secret(
 
     Ok(Json(CreateSecretResponse {
         identifier,
-        enc_decrypted_key: URL_SAFE_NO_PAD.encode(key),
+        encoded_key: URL_SAFE_NO_PAD.encode(key),
         expiry: payload.expiry,
     }))
+}
+
+async fn reveal_secret(
+    State(mut state): State<AppState>,
+    Path(identifier): Path<String>,
+    Json(payload): Json<RevealSecretRequest>,
+) -> Result<Json<RevealSecretResponse>, StatusCode> {
+    let key_bytes = URL_SAFE_NO_PAD
+        .decode(&payload.decryption_key)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let key_array: [u8; 32] = key_bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let key = Key::<XChaCha20Poly1305>::from(key_array);
+    let cipher = XChaCha20Poly1305::new(&key);
+
+    let encoded_payload = state
+        .redis
+        .get_del(&identifier)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let combined = URL_SAFE_NO_PAD
+        .decode(&encoded_payload)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if combined.len() < 24 {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    let nonce_array: [u8; 24] = combined[..24]
+        .try_into()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let nonce = XNonce::from(nonce_array);
+    let ciphertext = &combined[24..];
+
+    let plaintext = cipher
+        .decrypt(&nonce, ciphertext)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let secret = String::from_utf8(plaintext).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(RevealSecretResponse { secret }))
 }
