@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -54,6 +56,7 @@ async fn main() {
     let app = Router::new()
         .route("/secrets", post(create_secret))
         .route("/reveal/{identifier}", get(reveal_secret))
+        .route("/status/{identifier}", get(status))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -89,6 +92,33 @@ async fn create_secret(
         encoded_key: URL_SAFE_NO_PAD.encode(key),
         expiry: payload.expiry,
     }))
+}
+
+async fn status(
+    State(mut state): State<AppState>,
+    Path(identifier): Path<String>,
+) -> Result<String, StatusCode> {
+    let exp: i64 = state
+        .redis
+        .expire_time(&identifier)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    match exp {
+        -2 => Err(StatusCode::NOT_FOUND),
+        ts => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .as_secs() as i64;
+
+            let remaining = ts - now;
+            let hours = remaining / 3600;
+            let mins = (remaining % 3600) / 60;
+            let secs = remaining % 60;
+            Ok(format!("Expires in {hours}h {mins}m {secs}s"))
+        }
+    }
 }
 
 async fn reveal_secret(
