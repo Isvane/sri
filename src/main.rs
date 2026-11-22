@@ -9,7 +9,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, Generate, Key, KeyInit},
 };
-use redis::{AsyncTypedCommands, aio::ConnectionManager};
+use redis::{AsyncCommands, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -77,11 +77,10 @@ async fn create_secret(
 
     let identifier = Uuid::new_v4().to_string();
     let ttl_secs = u64::from(payload.expiry.unwrap_or(1800));
-    let encoded_payload = URL_SAFE_NO_PAD.encode(&combined);
 
-    state
+    let _: () = state
         .redis
-        .set_ex(&identifier, encoded_payload, ttl_secs)
+        .set_ex(&identifier, combined, ttl_secs)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -106,15 +105,10 @@ async fn reveal_secret(
     let key = Key::<XChaCha20Poly1305>::from(key_array);
     let cipher = XChaCha20Poly1305::new(&key);
 
-    let encoded_payload = state
+    let combined: Vec<u8> = state
         .redis
         .get_del(&identifier)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let combined = URL_SAFE_NO_PAD
-        .decode(&encoded_payload)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if combined.len() < 24 {
