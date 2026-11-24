@@ -23,14 +23,14 @@ struct AppState {
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateSecretRequest {
     secret: String,
-    expiry: Option<u16>,
+    expiry: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
 struct CreateSecretResponse {
     identifier: String,
     encoded_key: String,
-    expiry: Option<u16>,
+    expiry: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,18 +79,19 @@ async fn create_secret(
     combined.extend_from_slice(&ciphertext);
 
     let identifier = Uuid::new_v4().to_string();
-    let ttl_secs = u64::from(payload.expiry.unwrap_or(1800));
+    let ttl_secs = payload.expiry.unwrap_or(1800);
+    let clamped_ttl = ttl_secs.clamp(600, 604800);
 
     let _: () = state
         .redis
-        .set_ex(&identifier, combined, ttl_secs)
+        .set_ex(&identifier, combined, clamped_ttl)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(CreateSecretResponse {
         identifier,
         encoded_key: URL_SAFE_NO_PAD.encode(key),
-        expiry: payload.expiry,
+        expiry: Some(clamped_ttl),
     }))
 }
 
