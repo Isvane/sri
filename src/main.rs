@@ -55,7 +55,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/secrets", post(create_secret))
-        .route("/reveal/{identifier}", get(reveal_secret))
+        .route("/reveal/{identifier}", post(reveal_secret))
         .route("/status/{identifier}", get(status))
         .with_state(state);
 
