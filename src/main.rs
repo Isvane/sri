@@ -138,9 +138,10 @@ async fn reveal_secret(
 
     let combined: Vec<u8> = state
         .redis
-        .get_del(&identifier)
+        .get_del::<_, Option<Vec<u8>>>(&identifier)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     if combined.len() < 24 {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
